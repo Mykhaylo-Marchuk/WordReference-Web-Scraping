@@ -1,45 +1,47 @@
+import urllib.request
+
 from fastapi import HTTPException
 
-import requests
 from bs4 import BeautifulSoup
-from starlette import status
 from loguru import logger
+from starlette import status
 from starlette.responses import Response
 
 from app.schemas.word_model import WordModel
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:98.0) Gecko/20100101 Firefox/98.0",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0"
-}
-
 
 
 def _fetch_from_web(name: str) -> tuple[Response, str]:
-    base_url = "https://www.wordreference.com/definicion/"
+    base_url = "https://dle.rae.es/"
     final_url = base_url + name
-    return requests.get(final_url, headers=headers), final_url
+    req = urllib.request.Request(final_url)
+    req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/106.0')
+
+    return req, final_url
 
 
-def parse_response_into_word(response: Response, name: str, url: str) -> WordModel:
-    status_code = response.status_code
+def parse_response_into_word(req: urllib.request.Request, name: str, url: str) -> WordModel:
+    status_code: status = 500
+    try:
+        response = urllib.request.urlopen(req)
+        status_code = response.getcode()
+
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"There was an unexpected error.")
 
     logger.info(f"The response status code of the word {name} was {status_code}.")
 
     def get_definitions(s: BeautifulSoup) -> list[str]:
-        return soup.find_all("ol")
+        all_defs = soup.find_all("ol")
+        spaced_defs = []
+        for defin in all_defs:
+            for a in defin.find_all("li"):
+                spaced_defs.append(a)
+        return spaced_defs
 
     if status_code == status.HTTP_200_OK:
-        soup = BeautifulSoup(response.text, features='html.parser')
+        soup = BeautifulSoup(response, features='html.parser')
         if (header := soup.find("h1")) is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"The word '{name}' does not exist in this dictionary. Try a different word.")
 
@@ -51,15 +53,7 @@ def parse_response_into_word(response: Response, name: str, url: str) -> WordMod
                          url=url)
 
 
-    elif status_code == status.HTTP_400_BAD_REQUEST:
-        logger.error(f"Error for word {name}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"There was an error in your request. The word '{name}' may not exist.")
-    else:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"There was an unexpected error.")
-
 
 def get_word(name: str) -> WordModel:
-    response, url = _fetch_from_web(name)
-    return parse_response_into_word(response=response, name=name, url=url)
+    request, url = _fetch_from_web(name)
+    return parse_response_into_word(req=request, name=name, url=url)
